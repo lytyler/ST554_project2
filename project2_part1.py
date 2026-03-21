@@ -9,13 +9,27 @@ from pyspark.sql.types import *
 import pandas as pd
 
 class SparkDataCheck:
+    """
+    Class which takes an input of spark sql-style data frame (__init__), spark 
+    session and csv file (class method .from_csv), or spark session and pandas 
+    data frame (class method .from_pandas_df) to create an instance. The class objects 
+    have attributes of a sql-style data frame of the inputted data (df) and pandas 
+    data frames as data summaries (numSum, strSum). The class contains methods 
+    .numColSummarizer and .strColSummarizer) for generating the summaries from the 
+    data. There are alse methods for validating data columns (.numColVal, .strColVal) 
+    which append columns of boolean values to the df attribute.
+    """
     df = None
+    numSum = None
+    strSum = None
     
     def __init__(self, df: DataFrame):
+        "create an instance of the class from a spark sql-style data frame"""
         self.df = df
         
     @classmethod
     def from_csv(cls, spark_session, filepath: str):
+        """create an instance of the class from a spark session and a csv file"""
         df = spark_session.read.load(filepath, 
                              format = "csv", 
                              sep = ",", 
@@ -25,10 +39,12 @@ class SparkDataCheck:
         
     @classmethod
     def from_pandas_df(cls, spark_session, pandas_df: pd.DataFrame):
+        """create an instance of the class from a spark session and a pandas data frame"""
         df = spark_session.createDataFrame(pandas_df)
         return cls(df)
     
     def numColVal(self, column:str, upper_bound = None, lower_bound = None):
+        """validate a numeric column"""
         #check that column exists in df
         if column not in self.df.columns:
             print("Please enter a valid column name as a string.")
@@ -64,6 +80,7 @@ class SparkDataCheck:
         return self.df
     
     def strColVal(self, column: str, levels: list):
+        """validate a string column"""
         #check that column exists in df
         if column not in self.df.columns:
             print("Please enter a valid column name as a string.")
@@ -80,10 +97,12 @@ class SparkDataCheck:
         return self.df
     
     def nullCheck(self, column: str):
+        """check column for nulls"""
         self.df = self.df.withColumn(column + "IsNull", F.col(column).isNull())
         return self.df
     
     def numColSummarizer(self, column: str = None, gr_var: str = None):
+        """summarize a numeric column"""
         if column != None:
             #check for valid column name
             if column not in self.df.columns:
@@ -98,41 +117,46 @@ class SparkDataCheck:
         
         #create summary for user selected column without grouping variable
         if (column != None) & (gr_var == None):
-            numSum = self.df.select(column).agg(F.min(column), F.max(column)).toPandas()
+            self.numSum = self.df.select(column).agg(F.min(column), F.max(column)).toPandas()
             #numSum = self.df.describe() \
              #   .select("summary", column) \
               #  .filter((F.col("summary") == "min") | (F.col("summary") == "max")) \
                # .toPandas()
-            print(numSum)
-            return
+            return self.numSum
         
         #create summary for user selected column with grouping variable
         if (column != None) & (gr_var != None):
-            numSum = self.df.select(column, gr_var).groupBy(gr_var) \
+            self.numSum = self.df.select(column, gr_var).groupBy(gr_var) \
                 .agg(F.min(column), F.max(column)).toPandas()
-            print(numSum)
-            return
+            return self.numSum
         
         #create summary for all numeric variables (no column or grouping variable selected)
         if (column == None) & (gr_var == None):
-            num_cols = [x for x, i in self.df.dtypes if i.startswith("str") == False]
+            num_cols = [x for x, i in self.df.dtypes \
+                        if (i.startswith("str") == False) \
+                        & (i.startswith("bool") == False) \
+                        & (i.startswith("time") == False)]
             num_cols.insert(0, "summary")
-            numSum = self.df.describe().select(num_cols) \
+            self.numSum = self.df.describe().select(num_cols) \
                 .filter((F.col("summary") == "min") | (F.col("summary") == "max")).toPandas()
-            print(numSum)
+            return self.numSum
         
         #create summary for all numeric variables with user-selected grouping variable
         if (column == None) & (gr_var != None): 
-            num_cols2 = [x for x, i in self.df.dtypes if i.startswith("str") == False]
+            num_cols2 = [x for x, i in self.df.dtypes \
+                        if (i.startswith("str") == False) \
+                        & (i.startswith("bool") == False) \
+                        & (i.startswith("time") == False)]
             min_functions = [F.min(F.col(cols)) for cols in num_cols2]
             max_functions = [F.max(F.col(cols)) for cols in num_cols2]
             numSumMin = self.df.groupBy(F.col(gr_var)).agg(*min_functions).toPandas()
             numSumMax = self.df.groupBy(F.col(gr_var)).agg(*max_functions).toPandas()
-            numSum = pd.merge(numSumMin, numSumMax, on = gr_var)
-            print(numSum)
+            self.numSum = pd.merge(numSumMin, numSumMax, on = gr_var)
+            return self.numSum
     
     
-    def strColSummarize(self, columns: list):
+    def strColSummarizer(self, columns: list):
+        """summarize a string column"""
         if len(columns) == 1:
             #check that column name is valid
             if columns[0] not in self.df.columns:
@@ -145,9 +169,8 @@ class SparkDataCheck:
                 return
             
             #create and print summary
-            strSum = self.df.groupBy(columns[0]).count().toPandas()
-            print(strSum)
-            return
+            self.strSum = self.df.groupBy(columns[0]).count().toPandas()
+            return self.strSum
         
         if len(columns) == 2:
             #check that column names are valid
@@ -162,13 +185,12 @@ class SparkDataCheck:
                     print("Neither column specified is of string data type.")
                     return
                 else:
-                    strSum = self.df.groupBy(columns[1]).count().toPandas()
-                    print(strSum)
+                    self.strSum = self.df.groupBy(columns[1]).count().toPandas()
+                    return self.strSum
             else:
                 if dict(self.df.dtypes)[columns[1]] != "string":
-                    strSum = self.df.groupBy(columns[0]).count().toPandas()
-                    print(strSum)
+                    self.strSum = self.df.groupBy(columns[0]).count().toPandas()
+                    return self.strSum
                 else:
-                    strSum = self.df.groupBy(columns[0], columns[1]).count().toPandas()
-                    print(strSum)
-            return
+                    self.strSum = self.df.groupBy(columns[0], columns[1]).count().toPandas()
+                    return self.strSum
